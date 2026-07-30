@@ -180,11 +180,16 @@ export class ClientToolCoordinator {
   private schedulePause(): void {
     if (this.pauseScheduled || !this.pauseResolve) return;
     this.pauseScheduled = true;
+    // Not unref'd: the timer must fire to finish the response with
+    // `finish_reason: "tool_calls"`. Unref'ing lets it skip when the event
+    // loop is otherwise idle (e.g. in tests with no SDK stream alive), which
+    // wedges the turn. The collect window is short, so a pending timer at
+    // shutdown delays exit by at most `collectWindowMs` — an acceptable
+    // trade for reliable pausing.
     this.pauseTimer = setTimeout(() => {
       this.pauseTimer = undefined;
       this.resolvePauseAfterEmits();
     }, this.collectWindowMs);
-    this.pauseTimer.unref?.();
   }
 
   private resolvePauseAfterEmits(): void {

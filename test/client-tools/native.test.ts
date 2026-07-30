@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   ClientToolCoordinator,
   clientToolErrorResult,
@@ -28,9 +28,29 @@ function collector() {
   };
 }
 
+// Each execute() returns a promise that only resolves on provideResults /
+// settleAll, and arming a segment schedules an unref'd pause timer. Track every
+// coordinator so afterEach can detach the segment (clear the timer) and settle
+// any leaked pending executes — otherwise bun test waits on them at file
+// teardown and hangs.
+const coordinators: ClientToolCoordinator[] = [];
+
+function makeCoordinator(collectWindowMs: number = 5): ClientToolCoordinator {
+  const coordinator = new ClientToolCoordinator(collectWindowMs);
+  coordinators.push(coordinator);
+  return coordinator;
+}
+
 describe("ClientToolCoordinator", () => {
+  afterEach(() => {
+    for (const coordinator of coordinators.splice(0)) {
+      coordinator.detachSegment();
+      coordinator.settleAll(clientToolErrorResult("test teardown"));
+    }
+  });
+
   test("buildCustomTools maps specs onto SDK custom tools", () => {
-    const coordinator = new ClientToolCoordinator(5);
+    const coordinator = makeCoordinator(5);
     const tools = coordinator.buildCustomTools(specs);
 
     expect(Object.keys(tools)).toEqual(["get_weather", "echo"]);
@@ -41,7 +61,7 @@ describe("ClientToolCoordinator", () => {
   });
 
   test("execute registers a pending call, emits it, and pauses the segment", async () => {
-    const coordinator = new ClientToolCoordinator(5);
+    const coordinator = makeCoordinator(5);
     const tools = coordinator.buildCustomTools(specs);
     const { calls, emit } = collector();
 
@@ -65,7 +85,7 @@ describe("ClientToolCoordinator", () => {
   });
 
   test("collects parallel calls into one pause", async () => {
-    const coordinator = new ClientToolCoordinator(20);
+    const coordinator = makeCoordinator(20);
     const tools = coordinator.buildCustomTools(specs);
     const { calls, emit } = collector();
 
@@ -80,7 +100,7 @@ describe("ClientToolCoordinator", () => {
   });
 
   test("flushPendingCalls re-emits unanswered calls on a new segment", async () => {
-    const coordinator = new ClientToolCoordinator(5);
+    const coordinator = makeCoordinator(5);
     const tools = coordinator.buildCustomTools(specs);
     const first = collector();
 
@@ -99,7 +119,7 @@ describe("ClientToolCoordinator", () => {
   });
 
   test("calls that fire while detached surface via flushPendingCalls", async () => {
-    const coordinator = new ClientToolCoordinator(5);
+    const coordinator = makeCoordinator(5);
     const tools = coordinator.buildCustomTools(specs);
 
     void tools.echo!.execute({ text: "hi" }, {});
@@ -112,7 +132,7 @@ describe("ClientToolCoordinator", () => {
   });
 
   test("settleAll unblocks every pending execute", async () => {
-    const coordinator = new ClientToolCoordinator(5);
+    const coordinator = makeCoordinator(5);
     const tools = coordinator.buildCustomTools(specs);
 
     const a = tools.get_weather!.execute({ city: "NYC" }, {});
@@ -127,7 +147,7 @@ describe("ClientToolCoordinator", () => {
   });
 
   test("requestPause resolves the armed segment immediately", async () => {
-    const coordinator = new ClientToolCoordinator(10_000);
+    const coordinator = makeCoordinator(10_000);
     const { emit } = collector();
     const paused = coordinator.armSegment(emit);
     coordinator.requestPause();
@@ -135,7 +155,7 @@ describe("ClientToolCoordinator", () => {
   });
 
   test("derives stable call ids from SDK tool call ids", async () => {
-    const coordinator = new ClientToolCoordinator(5);
+    const coordinator = makeCoordinator(5);
     const tools = coordinator.buildCustomTools(specs);
     const { calls, emit } = collector();
     void coordinator.armSegment(emit);
@@ -147,7 +167,7 @@ describe("ClientToolCoordinator", () => {
   });
 
   test("mints distinct ids when sanitized SDK tool call ids collide", async () => {
-    const coordinator = new ClientToolCoordinator(5);
+    const coordinator = makeCoordinator(5);
     const tools = coordinator.buildCustomTools(specs);
     const { calls, emit } = collector();
     void coordinator.armSegment(emit);
